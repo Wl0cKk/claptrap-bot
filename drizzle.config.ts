@@ -4,4 +4,8 @@ export default defineConfig({
   schema: './src/db/schema.ts',
   out: './drizzle',
   dialect: 'sqlite',
+  dbCredentials: {
+    url: './claptrap.db',
+  },
+  driver: 'better-sqlite',
 });

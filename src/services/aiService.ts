@@ -1,10 +1,15 @@
 import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { z } from 'zod';
 import { config } from '../config';
 import { logger, aiProcessingTime } from './metrics';
 import { aiQueue } from './queue';
+
+// Get __dirname equivalent in ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const aiClient = axios.create({
   baseURL: config.AI_SERVER_URL,
