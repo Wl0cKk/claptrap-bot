@@ -1,6 +1,7 @@
 import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
+import { z } from 'zod';
 import { config } from '../config';
 import { logger, aiProcessingTime } from './metrics';
 import { aiQueue } from './queue';
@@ -16,6 +17,14 @@ const aiClient = axios.create({
 const loadPrompt = (filename: string): string => {
   return fs.readFileSync(path.join(__dirname, '../../prompts', filename), 'utf-8');
 };
+
+// Schema for validating router output
+const RoutingSchema = z.object({
+  intent: z.enum(['TRANSLATE', 'GENERATE']),
+  src: z.string().min(2),
+  tgt: z.string().min(2),
+  cleanText: z.string().min(1),
+});
 
 export async function transcribeAudio(fileBuffer: Buffer, fileName: string): Promise<string> {
   return aiQueue(async () => {
@@ -67,12 +76,19 @@ export async function routeIntent(text: string): Promise<RoutingResult> {
       });
       endTimer();
       
-      const content = response.data.message.content;
-      return JSON.parse(content);
+      // Parse and validate the JSON response
+      const parsed = JSON.parse(response.data.message.content);
+      return RoutingSchema.parse(parsed);
     } catch (error) {
       endTimer();
-      logger.error({ err: error }, 'Ollama routing failed');
-      throw new Error('Failed to route intent');
+      logger.error({ err: error }, 'Ollama routing validation failed');
+      // Fallback: treat as simple translation if routing fails
+      return {
+        intent: 'TRANSLATE',
+        src: 'auto',
+        tgt: 'en',
+        cleanText: text,
+      };
     }
   });
 }
