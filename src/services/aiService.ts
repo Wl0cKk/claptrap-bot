@@ -4,7 +4,6 @@ import { loadPrompt } from '../utils/promptLoader';
 import { logger, aiProcessingTime } from './metrics';
 import { aiQueue } from './queue';
 
-// Schema for validating router output
 const RoutingSchema = z.object({
   intent: z.enum(['TRANSLATE', 'GENERATE']).optional().default('TRANSLATE'),
   src: z.string().min(2),
@@ -63,8 +62,6 @@ export async function routeIntent(text: string): Promise<RoutingResult> {
       endTimer();
       
       const rawContent = response.data.message.content;
-      logger.info({ rawResponse: rawContent }, 'Raw Ollama Response');
-      
       const parsed = JSON.parse(rawContent);
       const validated = RoutingSchema.parse(parsed);
 
@@ -102,18 +99,23 @@ export async function translateText(text: string, src: string, tgt: string): Pro
   });
 }
 
-export async function generateResponse(prompt: string, srcLang: string): Promise<string> {
+export async function generateResponse(prompt: string, srcLang: string, targetLang: string): Promise<string> {
   return aiQueue(async () => {
     const endTimer = aiProcessingTime.startTimer({ service: 'ollama-gen' });
     try {
+      // For generation, we translate the prompt to English for better understanding by Qwen
       const englishPrompt = srcLang !== 'en' ? await translateText(prompt, srcLang, 'en') : prompt;
+
       const response = await aiClient.post('/ollama/api/chat', {
         model: 'qwen2.5:3b',
         stream: false,
         keep_alive: -1,
         options: { temperature: 0.7, num_ctx: 2048 },
         messages: [
-          { role: 'system', content: 'You are a helpful assistant.' },
+          { 
+            role: 'system', 
+            content: `You are a creative assistant. Follow the user's request precisely. The final output must be in ${targetLang}.` 
+          },
           { role: 'user', content: englishPrompt },
         ],
       });

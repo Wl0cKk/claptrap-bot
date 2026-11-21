@@ -1,12 +1,11 @@
 import { Context, Telegraf } from 'telegraf';
-import { transcribeAudio, routeIntent, translateText } from '../services/aiService';
+import { transcribeAudio, routeIntent, translateText, generateResponse } from '../services/aiService';
 import { logger } from '../services/metrics';
 import { db } from '../db';
 import { users } from '../db/schema';
 import { eq } from 'drizzle-orm';
 
 export function registerMessageHandlers(bot: Telegraf) {
-  // Handle text messages
   bot.on('text', async (ctx) => {
     if (ctx.message.text.startsWith('/')) return;
 
@@ -22,17 +21,27 @@ export function registerMessageHandlers(bot: Telegraf) {
       logger.info({ userId }, `Received text: ${text}`);
 
       const routing = await routeIntent(text);
-      const finalTgt = routing.tgt === targetLang ? targetLang : routing.tgt;
-      const translated = await translateText(routing.cleanText, routing.src, finalTgt);
+      // Use router's target if it detected an explicit language, otherwise use user preference
+      const finalTgt = routing.tgt !== 'en' && routing.tgt !== 'ru' ? routing.tgt : targetLang;
+
+      let responseText: string;
+
+      if (routing.intent === 'GENERATE') {
+        logger.info({ userId }, 'Intent: GENERATE. Generating response...');
+        // Pass the target language to the generator
+        responseText = await generateResponse(routing.cleanText, routing.src, finalTgt);
+      } else {
+        logger.info({ userId }, 'Intent: TRANSLATE. Translating...');
+        responseText = await translateText(routing.cleanText, routing.src, finalTgt);
+      }
       
-      await ctx.reply(translated);
+      await ctx.reply(responseText);
     } catch (error) {
       logger.error({ err: error, userId: ctx.from?.id }, 'Error processing text message');
       await ctx.reply('Sorry, something went wrong while processing your request.');
     }
   });
 
-  // Handle voice and audio messages
   bot.on('voice', async (ctx) => await handleAudio(ctx, ctx.message.voice.file_id));
   bot.on('audio', async (ctx) => await handleAudio(ctx, ctx.message.audio.file_id));
 }
@@ -55,11 +64,17 @@ async function handleAudio(ctx: Context, fileId: string) {
       where: eq(users.id, userId),
     });
     const targetLang = user?.languagePreference || 'en';
-    const finalTgt = routing.tgt === targetLang ? targetLang : routing.tgt;
+    const finalTgt = routing.tgt !== 'en' && routing.tgt !== 'ru' ? routing.tgt : targetLang;
 
-    const translated = await translateText(routing.cleanText, routing.src, finalTgt);
+    let responseText: string;
+
+    if (routing.intent === 'GENERATE') {
+      responseText = await generateResponse(routing.cleanText, routing.src, finalTgt);
+    } else {
+      responseText = await translateText(routing.cleanText, routing.src, finalTgt);
+    }
     
-    await ctx.reply(translated);
+    await ctx.reply(responseText);
   } catch (error) {
     logger.error({ err: error, userId: ctx.from?.id }, 'Error processing audio message');
     await ctx.reply('Sorry, I could not process the audio message.');
