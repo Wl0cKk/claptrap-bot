@@ -4,7 +4,6 @@ import path from 'path';
 import { config } from '../config';
 import { logger, aiProcessingTime } from './metrics';
 
-// Initialize Axios client with base URL and API key
 const aiClient = axios.create({
   baseURL: config.AI_SERVER_URL,
   headers: {
@@ -13,14 +12,10 @@ const aiClient = axios.create({
   timeout: 30000,
 });
 
-// Helper to load prompts from markdown files
 const loadPrompt = (filename: string): string => {
   return fs.readFileSync(path.join(__dirname, '../../prompts', filename), 'utf-8');
 };
 
-/**
- * Step 1: Transcribe audio using Whisper
- */
 export async function transcribeAudio(fileBuffer: Buffer, fileName: string): Promise<string> {
   const endTimer = aiProcessingTime.startTimer({ service: 'whisper' });
   const formData = new FormData();
@@ -43,10 +38,14 @@ export async function transcribeAudio(fileBuffer: Buffer, fileName: string): Pro
   }
 }
 
-/**
- * Step 2: Route intent and detect languages using Ollama
- */
-export async function routeIntent(text: string): Promise<{ src: string; tgt: string; cleanText: string }> {
+export interface RoutingResult {
+  intent: 'TRANSLATE' | 'GENERATE';
+  src: string;
+  tgt: string;
+  cleanText: string;
+}
+
+export async function routeIntent(text: string): Promise<RoutingResult> {
   const endTimer = aiProcessingTime.startTimer({ service: 'ollama' });
   try {
     const systemPrompt = loadPrompt('router_system.md');
@@ -73,9 +72,6 @@ export async function routeIntent(text: string): Promise<{ src: string; tgt: str
   }
 }
 
-/**
- * Step 3: Translate text using NLLB-200
- */
 export async function translateText(text: string, src: string, tgt: string): Promise<string> {
   const endTimer = aiProcessingTime.startTimer({ service: 'nllb' });
   try {
@@ -92,5 +88,31 @@ export async function translateText(text: string, src: string, tgt: string): Pro
     endTimer();
     logger.error({ err: error }, 'NLLB translation failed');
     throw new Error('Failed to translate text');
+  }
+}
+
+export async function generateResponse(prompt: string, srcLang: string): Promise<string> {
+  const endTimer = aiProcessingTime.startTimer({ service: 'ollama-gen' });
+  try {
+    // Translate prompt to English for better Qwen performance if needed
+    const englishPrompt = srcLang !== 'en' ? await translateText(prompt, srcLang, 'en') : prompt;
+
+    const response = await aiClient.post('/ollama/api/chat', {
+      model: 'qwen2.5:3b',
+      stream: false,
+      keep_alive: -1,
+      options: { temperature: 0.7, num_ctx: 2048 },
+      messages: [
+        { role: 'system', content: 'You are a helpful assistant. Answer concisely and accurately.' },
+        { role: 'user', content: englishPrompt },
+      ],
+    });
+    endTimer();
+    
+    return response.data.message.content;
+  } catch (error) {
+    endTimer();
+    logger.error({ err: error }, 'Qwen generation failed');
+    throw new Error('Failed to generate response');
   }
 }
