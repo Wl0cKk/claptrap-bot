@@ -1,0 +1,32 @@
+{
+  "name": "claptrap-bot",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "keywords": [],
+  "type": "module",
+  "dependencies": {
+    "axios": "^1.21.1",
+    "better-sqlite3": "^13.2.0",
+    "dotenv": "^18.0.10",
+    "drizzle-orm": "^0.45.4",
+    "p-limit": "^7.3.3",
+    "pino": "^10.4.0",
+    "prom-client": "^15.1.3",
+    "telegraf": "^4.16.3",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^26.6.6",
+    "drizzle-kit": "^0.31.11",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
