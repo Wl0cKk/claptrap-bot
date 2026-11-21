@@ -1,41 +1,29 @@
-import axios from 'axios';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { z } from 'zod';
-import { config } from '../config';
+import { aiClient } from './aiClient';
+import { loadPrompt } from '../utils/promptLoader';
 import { logger, aiProcessingTime } from './metrics';
 import { aiQueue } from './queue';
 
-// Get __dirname equivalent in ES modules
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const aiClient = axios.create({
-  baseURL: config.AI_SERVER_URL,
-  headers: {
-    'X-API-Key': config.API_KEY,
-  },
-  timeout: 30000,
-});
-
-const loadPrompt = (filename: string): string => {
-  return fs.readFileSync(path.join(__dirname, '../../prompts', filename), 'utf-8');
-};
-
 // Schema for validating router output
 const RoutingSchema = z.object({
-  intent: z.enum(['TRANSLATE', 'GENERATE']),
+  intent: z.enum(['TRANSLATE', 'GENERATE']).optional().default('TRANSLATE'),
   src: z.string().min(2),
   tgt: z.string().min(2),
-  cleanText: z.string().min(1),
+  text: z.string().min(1).optional(),
+  cleanText: z.string().min(1).optional(),
 });
+
+export interface RoutingResult {
+  intent: 'TRANSLATE' | 'GENERATE';
+  src: string;
+  tgt: string;
+  cleanText: string;
+}
 
 export async function transcribeAudio(fileBuffer: Buffer, fileName: string): Promise<string> {
   return aiQueue(async () => {
     const endTimer = aiProcessingTime.startTimer({ service: 'whisper' });
     const formData = new FormData();
-    
     const blob = new Blob([fileBuffer], { type: 'audio/ogg' });
     formData.append('file', blob, fileName);
     formData.append('response_format', 'json');
@@ -53,13 +41,6 @@ export async function transcribeAudio(fileBuffer: Buffer, fileName: string): Pro
       throw new Error('Failed to transcribe audio');
     }
   });
-}
-
-export interface RoutingResult {
-  intent: 'TRANSLATE' | 'GENERATE';
-  src: string;
-  tgt: string;
-  cleanText: string;
 }
 
 export async function routeIntent(text: string): Promise<RoutingResult> {
@@ -81,13 +62,21 @@ export async function routeIntent(text: string): Promise<RoutingResult> {
       });
       endTimer();
       
-      // Parse and validate the JSON response
-      const parsed = JSON.parse(response.data.message.content);
-      return RoutingSchema.parse(parsed);
+      const rawContent = response.data.message.content;
+      logger.info({ rawResponse: rawContent }, 'Raw Ollama Response');
+      
+      const parsed = JSON.parse(rawContent);
+      const validated = RoutingSchema.parse(parsed);
+
+      return {
+        intent: validated.intent,
+        src: validated.src,
+        tgt: validated.tgt,
+        cleanText: validated.cleanText || validated.text || text,
+      };
     } catch (error) {
       endTimer();
-      logger.error({ err: error }, 'Ollama routing validation failed');
-      // Fallback: treat as simple translation if routing fails
+      logger.error({ err: error }, 'Ollama routing processing failed');
       return {
         intent: 'TRANSLATE',
         src: 'auto',
@@ -102,13 +91,7 @@ export async function translateText(text: string, src: string, tgt: string): Pro
   return aiQueue(async () => {
     const endTimer = aiProcessingTime.startTimer({ service: 'nllb' });
     try {
-      const response = await aiClient.post('/nllb/translate', {
-        text,
-        src,
-        tgt,
-      }, {
-        timeout: 30000,
-      });
+      const response = await aiClient.post('/nllb/translate', { text, src, tgt }, { timeout: 30000 });
       endTimer();
       return response.data.translated;
     } catch (error) {
@@ -123,21 +106,18 @@ export async function generateResponse(prompt: string, srcLang: string): Promise
   return aiQueue(async () => {
     const endTimer = aiProcessingTime.startTimer({ service: 'ollama-gen' });
     try {
-      // Translate prompt to English for better Qwen performance if needed
       const englishPrompt = srcLang !== 'en' ? await translateText(prompt, srcLang, 'en') : prompt;
-
       const response = await aiClient.post('/ollama/api/chat', {
         model: 'qwen2.5:3b',
         stream: false,
         keep_alive: -1,
         options: { temperature: 0.7, num_ctx: 2048 },
         messages: [
-          { role: 'system', content: 'You are a helpful assistant. Answer concisely and accurately.' },
+          { role: 'system', content: 'You are a helpful assistant.' },
           { role: 'user', content: englishPrompt },
         ],
       });
       endTimer();
-      
       return response.data.message.content;
     } catch (error) {
       endTimer();
